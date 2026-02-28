@@ -3,6 +3,7 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask, render_template_string, request, redirect, url_for, abort
+from urllib.parse import urlencode, quote, unquote
 from tasks_cli_interactive import db_connect, ALLOWED_STATUS
 
 app = Flask(__name__)
@@ -205,7 +206,7 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
   <h4 class="mb-0">Tasks <span class="badge bg-secondary">{{ rows|length }}</span></h4>
   <div class="d-flex gap-2">
     <button onclick="window.print()" class="btn btn-outline-secondary btn-sm">Print</button>
-    <a href="/add" class="btn btn-primary btn-sm">+ Add Task</a>
+    <a href="/add?return_to={{ return_to }}" class="btn btn-primary btn-sm">+ Add Task</a>
   </div>
 </div>
 
@@ -282,9 +283,10 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
       <td>{{ r['Action'] or '' }}</td>
       <td class="notes-cell">{{ r['Notes'] or '' }}</td>
       <td class="no-print">
-        <a href="/edit/{{ r['ItemID'] }}" class="btn btn-outline-primary btn-sm">Edit</a>
+        <a href="/edit/{{ r['ItemID'] }}?return_to={{ return_to }}" class="btn btn-outline-primary btn-sm">Edit</a>
         <form method="post" action="/delete/{{ r['ItemID'] }}" class="d-inline"
               onsubmit="return confirm('Delete item {{ r['ItemID'] }}?')">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
           <button type="submit" class="btn btn-outline-danger btn-sm">Del</button>
         </form>
       </td>
@@ -365,8 +367,9 @@ TASK_FORM = BASE.replace("{% block content %}{% endblock %}", """
         <label class="form-label">Notes</label>
         <textarea name="notes" class="form-control" rows="5">{{ task.Notes or '' }}</textarea>
       </div>
+      <input type="hidden" name="return_to" value="{{ return_to }}">
       <button type="submit" class="btn btn-primary">Save</button>
-      <a href="/" class="btn btn-secondary ms-2">Cancel</a>
+      <a href="{{ return_to or '/' }}" class="btn btn-secondary ms-2">Cancel</a>
     </form>
   </div>
 </div>
@@ -384,6 +387,20 @@ def task_list():
     sel_statuses = request.args.getlist("status") or list(ALLOWED_STATUS)
     sort = request.args.get("sort", "ItemID")
     direction = request.args.get("dir", "desc")
+
+    # Build return_to so edit/delete can restore this exact view
+    qs_parts = []
+    if sel_project:
+        qs_parts.append(("project", sel_project))
+    if sel_who:
+        qs_parts.append(("who", sel_who))
+    for s in sel_statuses:
+        qs_parts.append(("status", s))
+    if sort != "ItemID":
+        qs_parts.append(("sort", sort))
+    if direction != "desc":
+        qs_parts.append(("dir", direction))
+    return_to = quote("/?" + urlencode(qs_parts), safe="") if qs_parts else "%2F"
 
     rows = fetch_all(
         project=sel_project or None,
@@ -412,6 +429,7 @@ def task_list():
         sort=sort,
         direction=direction,
         columns=columns,
+        return_to=return_to,
     )
 
 
@@ -424,10 +442,12 @@ def add_task():
         priority = request.form.get("priority", 3)
         action = request.form.get("action", "").strip()
         notes = request.form.get("notes", "").strip()
+        return_to = unquote(request.form.get("return_to", "%2F"))
         if project and action:
             insert_task(project, who, status, priority, action, notes)
-            return redirect(url_for("task_list"))
+            return redirect(return_to)
 
+    return_to = request.args.get("return_to", "%2F")
     class Empty:
         Project = Who = Status = Action = Notes = ""
         Priority = 3
@@ -437,6 +457,7 @@ def add_task():
         form_title="Add Task",
         task=Empty(),
         statuses=ALLOWED_STATUS,
+        return_to=return_to,
     )
 
 
@@ -453,14 +474,17 @@ def edit_task(item_id):
         priority = request.form.get("priority", 3)
         action = request.form.get("action", "").strip()
         notes = request.form.get("notes", "").strip()
+        return_to = unquote(request.form.get("return_to", "%2F"))
         update_task(item_id, project, who, status, priority, action, notes)
-        return redirect(url_for("task_list"))
+        return redirect(return_to)
 
+    return_to = request.args.get("return_to", "%2F")
     return render_template_string(
         TASK_FORM,
         form_title=f"Edit Task #{item_id}",
         task=row,
         statuses=ALLOWED_STATUS,
+        return_to=return_to,
     )
 
 
@@ -469,8 +493,9 @@ def delete_task_route(item_id):
     row = fetch_one(item_id)
     if row is None:
         abort(404)
+    return_to = unquote(request.form.get("return_to", "%2F"))
     delete_task(item_id)
-    return redirect(url_for("task_list"))
+    return redirect(return_to)
 
 
 # ---------------------------------------------------------------------------
