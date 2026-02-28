@@ -1,11 +1,12 @@
 # Local Task List
 
-A local-first, menu-driven CLI for managing tasks stored in a SQLite database. Runs entirely offline. No cloud services or external APIs required.
+A local-first task management system with a menu-driven CLI and a Flask web UI. Stores data in a SQLite database. Runs entirely offline. No cloud services or external APIs required.
 
 ## Stack
 
 - Python 3.x
 - SQLite (`tasks.db`)
+- Flask (`tasks_web.py`) — web UI, runs on `http://localhost:5000`
 - Ollama (`qwen3:8b`) — optional, used for clipboard summarization
 - `pyperclip` — optional, required for clipboard access
 
@@ -49,9 +50,27 @@ Prompts for Project, Who, Status, Priority, Title, and Notes. If `pyperclip` is 
 
 LLM output is validated against a strict schema with up to 3 retry attempts on failure.
 
+## Web UI
+
+```
+pip install flask
+python tasks_web.py
+```
+
+Runs at `http://localhost:5000`.
+
+| Route | Function |
+|---|---|
+| `/` | Task list — filter by Project/Who, sort by any column, edit, delete |
+| `/add` | Add task form |
+| `/edit/<id>` | Edit existing task |
+| `/delete/<id>` | Delete task |
+| `/reports` | Tasks by Project × Status pivot table, filterable by Who |
+
 ## Requirements
 
 - Python 3.x
+- Flask (`pip install flask`) — required for web UI
 - Ollama running locally with `qwen3:8b` pulled (only required for clipboard summarization)
 - `pyperclip` installed (only required for clipboard access)
 
