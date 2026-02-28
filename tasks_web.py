@@ -25,7 +25,7 @@ def get_distinct(column):
     return [r[0] for r in rows]
 
 
-def fetch_all(project=None, who=None, sort="ItemID", direction="desc"):
+def fetch_all(project=None, who=None, statuses=None, sort="ItemID", direction="desc"):
     allowed_cols = {"ItemID", "Project", "Who", "Status", "Priority", "Action"}
     if sort not in allowed_cols:
         sort = "ItemID"
@@ -46,6 +46,10 @@ def fetch_all(project=None, who=None, sort="ItemID", direction="desc"):
     if who:
         wheres.append("Who = ?")
         params.append(who)
+    if statuses:
+        placeholders = ",".join("?" * len(statuses))
+        wheres.append(f"Status IN ({placeholders})")
+        params.extend(statuses)
 
     where_clause = ("WHERE " + " AND ".join(wheres)) if wheres else ""
 
@@ -109,40 +113,6 @@ def delete_task(item_id):
     con.close()
 
 
-def get_reports(who=None):
-    con = db_connect()
-    con.row_factory = __import__("sqlite3").Row
-    cur = con.cursor()
-    wheres = []
-    params = []
-    if who:
-        wheres.append("Who = ?")
-        params.append(who)
-    where_clause = ("WHERE " + " AND ".join(wheres)) if wheres else ""
-    rows = cur.execute(
-        f"SELECT COALESCE(Project,'(none)') as Project, Status, COUNT(*) as Cnt "
-        f"FROM ActionList {where_clause} "
-        f"GROUP BY Project, Status "
-        f"ORDER BY Project COLLATE NOCASE, "
-        f"CASE Status WHEN 'Open' THEN 1 WHEN 'IP' THEN 2 WHEN 'Wait' THEN 3 WHEN 'Done' THEN 4 ELSE 5 END",
-        params,
-    ).fetchall()
-    con.close()
-    # Pivot: {project: {status: count}}
-    data = {}
-    for r in rows:
-        p = r["Project"]
-        if p not in data:
-            data[p] = {s: 0 for s in ALLOWED_STATUS}
-        data[p][r["Status"]] = r["Cnt"]
-    # Row totals
-    totals = {s: 0 for s in ALLOWED_STATUS}
-    for p_data in data.values():
-        for s in ALLOWED_STATUS:
-            totals[s] += p_data.get(s, 0)
-    return data, totals
-
-
 # ---------------------------------------------------------------------------
 # Base template
 # ---------------------------------------------------------------------------
@@ -165,29 +135,48 @@ BASE = """
     .badge-Done     { background-color: #198754; }
     .badge-Deferred { background-color: #adb5bd; color: #000; }
     .notes-cell { max-width: 300px; white-space: pre-wrap; font-size: 0.85em; }
+
+    /* Column resize */
+    .resizable-table th { position: relative; overflow: hidden; }
+    .resize-handle {
+      position: absolute; right: 0; top: 0;
+      width: 6px; height: 100%;
+      cursor: col-resize; user-select: none;
+      background: rgba(255,255,255,0.15);
+    }
+    .resize-handle:hover, .resize-handle.dragging { background: rgba(255,255,255,0.45); }
+
+    /* Print */
+    @media print {
+      @page { size: landscape; margin: 1cm; }
+      .no-print { display: none !important; }
+      nav { display: none !important; }
+      body { padding-top: 0 !important; }
+      .badge-Open     { background-color: #0d6efd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-IP       { background-color: #fd7e14 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-Wait     { background-color: #6c757d !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-Done     { background-color: #198754 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-Deferred { background-color: #adb5bd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .table-dark th  { background-color: #212529 !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      table { width: 100% !important; font-size: 10pt; }
+      .print-header { display: block !important; }
+    }
+    .print-header { display: none; margin-bottom: 8px; font-size: 11pt; }
   </style>
 </head>
 <body>
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top no-print">
   <div class="container-fluid">
     <a class="navbar-brand" href="/">Task List</a>
     <div class="collapse navbar-collapse">
       <ul class="navbar-nav me-auto">
         <li class="nav-item"><a class="nav-link" href="/">Tasks</a></li>
-        <li class="nav-item"><a class="nav-link" href="/reports">Reports</a></li>
         <li class="nav-item"><a class="nav-link" href="/add">Add Task</a></li>
       </ul>
     </div>
   </div>
 </nav>
 <div class="container-fluid mt-3">
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-      <div class="alert alert-{{ cat }} alert-dismissible fade show" role="alert">
-        {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-      </div>
-    {% endfor %}
-  {% endwith %}
   {% block content %}{% endblock %}
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -201,13 +190,29 @@ BASE = """
 
 TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0">Tasks <span class="badge bg-secondary">{{ rows|length }}</span></h4>
-  <a href="/add" class="btn btn-primary btn-sm">+ Add Task</a>
+
+<!-- Print header (hidden on screen) -->
+<div class="print-header">
+  <strong>Task List</strong>
+  {% if sel_project %} &mdash; Project: {{ sel_project }}{% endif %}
+  {% if sel_who %} &mdash; User: {{ sel_who }}{% endif %}
+  {% if sel_statuses %} &mdash; Status: {{ sel_statuses | join(', ') }}{% endif %}
+  &nbsp;({{ rows|length }} tasks)
 </div>
 
-<form method="get" class="row g-2 mb-3">
+<!-- Toolbar -->
+<div class="d-flex justify-content-between align-items-center mb-3 no-print">
+  <h4 class="mb-0">Tasks <span class="badge bg-secondary">{{ rows|length }}</span></h4>
+  <div class="d-flex gap-2">
+    <button onclick="window.print()" class="btn btn-outline-secondary btn-sm">Print</button>
+    <a href="/add" class="btn btn-primary btn-sm">+ Add Task</a>
+  </div>
+</div>
+
+<!-- Filters -->
+<form method="get" class="row g-2 mb-3 align-items-end no-print">
   <div class="col-auto">
+    <label class="form-label mb-1 small">Project</label>
     <select name="project" class="form-select form-select-sm">
       <option value="">All Projects</option>
       {% for p in projects %}
@@ -216,6 +221,7 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
     </select>
   </div>
   <div class="col-auto">
+    <label class="form-label mb-1 small">User</label>
     <select name="who" class="form-select form-select-sm">
       <option value="">All Users</option>
       {% for w in whos %}
@@ -224,28 +230,45 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
     </select>
   </div>
   <div class="col-auto">
+    <label class="form-label mb-1 small">Status</label>
+    <div class="d-flex flex-wrap gap-2 pt-1">
+      {% for s in all_statuses %}
+        <div class="form-check form-check-inline mb-0">
+          <input class="form-check-input" type="checkbox" name="status" value="{{ s }}"
+                 id="st_{{ s }}" {% if s in sel_statuses %}checked{% endif %}>
+          <label class="form-check-label small" for="st_{{ s }}">{{ s }}</label>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="col-auto">
     <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
     <a href="/" class="btn btn-outline-secondary btn-sm">Clear</a>
   </div>
 </form>
 
+<!-- Table -->
 <div class="table-responsive">
-<table class="table table-bordered table-hover table-sm align-middle">
+<table class="table table-bordered table-hover table-sm align-middle resizable-table" id="task-table">
   <thead class="table-dark">
     <tr>
       {% for col, label in columns %}
-        <th>
-          {% if sort == col and direction == 'asc' %}
-            <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=desc">{{ label }} ▲</a>
-          {% elif sort == col %}
-            <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=asc">{{ label }} ▼</a>
-          {% else %}
-            <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=asc">{{ label }}</a>
-          {% endif %}
+        <th style="min-width:40px;">
+          <span class="no-print">
+            {% if sort == col and direction == 'asc' %}
+              <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=desc{% for s in sel_statuses %}&status={{ s }}{% endfor %}">{{ label }} ▲</a>
+            {% elif sort == col %}
+              <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=asc{% for s in sel_statuses %}&status={{ s }}{% endfor %}">{{ label }} ▼</a>
+            {% else %}
+              <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=asc{% for s in sel_statuses %}&status={{ s }}{% endfor %}">{{ label }}</a>
+            {% endif %}
+          </span>
+          <span class="print-only" style="display:none;">{{ label }}</span>
+          <div class="resize-handle no-print"></div>
         </th>
       {% endfor %}
-      <th>Notes</th>
-      <th>Actions</th>
+      <th style="min-width:80px;">Notes<div class="resize-handle no-print"></div></th>
+      <th class="no-print">Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -258,7 +281,7 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
       <td>{{ r['Priority'] }}</td>
       <td>{{ r['Action'] or '' }}</td>
       <td class="notes-cell">{{ r['Notes'] or '' }}</td>
-      <td>
+      <td class="no-print">
         <a href="/edit/{{ r['ItemID'] }}" class="btn btn-outline-primary btn-sm">Edit</a>
         <form method="post" action="/delete/{{ r['ItemID'] }}" class="d-inline"
               onsubmit="return confirm('Delete item {{ r['ItemID'] }}?')">
@@ -270,6 +293,36 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
   </tbody>
 </table>
 </div>
+
+<style>
+  @media print { .print-only { display: inline !important; } }
+</style>
+
+<script>
+(function() {
+  // Column resize
+  const table = document.getElementById('task-table');
+  if (!table) return;
+  table.querySelectorAll('.resize-handle').forEach(handle => {
+    let startX, startW, th;
+    handle.addEventListener('mousedown', e => {
+      th = handle.parentElement;
+      startX = e.pageX;
+      startW = th.offsetWidth;
+      handle.classList.add('dragging');
+      const onMove = e => { th.style.width = Math.max(40, startW + (e.pageX - startX)) + 'px'; };
+      const onUp = () => {
+        handle.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      e.preventDefault();
+    });
+  });
+})();
+</script>
 {% endblock %}
 """)
 
@@ -321,73 +374,6 @@ TASK_FORM = BASE.replace("{% block content %}{% endblock %}", """
 """)
 
 # ---------------------------------------------------------------------------
-# Reports template
-# ---------------------------------------------------------------------------
-
-REPORTS = BASE.replace("{% block content %}{% endblock %}", """
-{% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0">Reports — Tasks by Project &amp; Status</h4>
-</div>
-
-<form method="get" class="row g-2 mb-3">
-  <div class="col-auto">
-    <select name="who" class="form-select form-select-sm">
-      <option value="">All Users</option>
-      {% for w in whos %}
-        <option value="{{ w }}" {% if w == sel_who %}selected{% endif %}>{{ w }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="col-auto">
-    <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
-    <a href="/reports" class="btn btn-outline-secondary btn-sm">Clear</a>
-  </div>
-</form>
-
-<div class="table-responsive">
-<table class="table table-bordered table-sm align-middle">
-  <thead class="table-dark">
-    <tr>
-      <th>Project</th>
-      {% for s in statuses %}
-        <th class="text-center">{{ s }}</th>
-      {% endfor %}
-      <th class="text-center">Total</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for project, counts in data.items() %}
-    <tr>
-      <td>{{ project }}</td>
-      {% for s in statuses %}
-        <td class="text-center">
-          {% if counts[s] > 0 %}
-            <span class="badge badge-{{ s }}">{{ counts[s] }}</span>
-          {% else %}
-            <span class="text-muted">—</span>
-          {% endif %}
-        </td>
-      {% endfor %}
-      <td class="text-center fw-bold">{{ counts.values()|sum }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-  <tfoot class="table-secondary">
-    <tr>
-      <td><strong>Total</strong></td>
-      {% for s in statuses %}
-        <td class="text-center"><strong>{{ totals[s] }}</strong></td>
-      {% endfor %}
-      <td class="text-center"><strong>{{ totals.values()|sum }}</strong></td>
-    </tr>
-  </tfoot>
-</table>
-</div>
-{% endblock %}
-""")
-
-# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -395,12 +381,14 @@ REPORTS = BASE.replace("{% block content %}{% endblock %}", """
 def task_list():
     sel_project = request.args.get("project", "")
     sel_who = request.args.get("who", "")
+    sel_statuses = request.args.getlist("status") or list(ALLOWED_STATUS)
     sort = request.args.get("sort", "ItemID")
     direction = request.args.get("dir", "desc")
 
     rows = fetch_all(
         project=sel_project or None,
         who=sel_who or None,
+        statuses=sel_statuses,
         sort=sort,
         direction=direction,
     )
@@ -417,8 +405,10 @@ def task_list():
         rows=rows,
         projects=get_distinct("Project"),
         whos=get_distinct("Who"),
+        all_statuses=ALLOWED_STATUS,
         sel_project=sel_project,
         sel_who=sel_who,
+        sel_statuses=sel_statuses,
         sort=sort,
         direction=direction,
         columns=columns,
@@ -434,9 +424,7 @@ def add_task():
         priority = request.form.get("priority", 3)
         action = request.form.get("action", "").strip()
         notes = request.form.get("notes", "").strip()
-        if not project or not action:
-            pass  # fall through to re-render with values intact
-        else:
+        if project and action:
             insert_task(project, who, status, priority, action, notes)
             return redirect(url_for("task_list"))
 
@@ -483,20 +471,6 @@ def delete_task_route(item_id):
         abort(404)
     delete_task(item_id)
     return redirect(url_for("task_list"))
-
-
-@app.route("/reports")
-def reports():
-    sel_who = request.args.get("who", "")
-    data, totals = get_reports(who=sel_who or None)
-    return render_template_string(
-        REPORTS,
-        data=data,
-        totals=totals,
-        statuses=ALLOWED_STATUS,
-        whos=get_distinct("Who"),
-        sel_who=sel_who,
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -61,11 +61,17 @@ Runs at `http://localhost:5000`.
 
 | Route | Function |
 |---|---|
-| `/` | Task list — filter by Project/Who, sort by any column, edit, delete |
+| `/` | Task list — filter, sort, print |
 | `/add` | Add task form |
 | `/edit/<id>` | Edit existing task |
 | `/delete/<id>` | Delete task |
-| `/reports` | Tasks by Project × Status pivot table, filterable by Who |
+
+### Task list features
+
+- **Filter** by Project, User, and any combination of Status (Open, IP, Wait, Done, Deferred)
+- **Sort** by any column (ascending/descending)
+- **Resizable columns** — drag column header edge to resize
+- **Print** — landscape layout, filters/controls hidden, active filter summary shown in header
 
 ## Requirements
 
