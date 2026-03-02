@@ -100,7 +100,8 @@ BASE = """
     .badge-Done  { background-color: #198754; }
     .badge-Defrd { background-color: #adb5bd; color: #000; }
     .badge-Cncld { background-color: #6f42c1; }
-    .notes-cell { max-width: 300px; white-space: pre-wrap; font-size: 0.85em; }
+    .notes-cell { max-width: 300px; padding: 0 !important; }
+    .notes-cell div { white-space: pre-wrap; font-size: 0.85em; max-height: 2.8em; overflow: hidden; padding: 2px 4px; }
     /* Remove chevron arrow from inline table dropdowns */
     td .form-select { background-image: none; padding-right: 0.5rem; }
 
@@ -229,6 +230,16 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
 <!-- Table -->
 <div class="table-responsive">
 <table class="table table-bordered table-hover table-sm align-middle resizable-table" id="task-table">
+  <colgroup>
+    <col style="width:3%"><!-- ID -->
+    <col style="width:5%"><!-- Project -->
+    <col style="width:4%"><!-- Who -->
+    <col style="width:4%"><!-- Status -->
+    <col style="width:4%"><!-- Pri -->
+    <col style="width:22%"><!-- Title -->
+    <col style="width:30%"><!-- Notes -->
+    <col style="width:8%"><!-- Actions -->
+  </colgroup>
   <thead class="table-dark">
     <tr>
       {% for col, label in columns %}
@@ -309,7 +320,7 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
       </td>
       <td class="print-priority" style="display:none;">{{ r['Priority'] }}</td>
       <td>{{ r['Action'] or '' }}</td>
-      <td class="notes-cell">{{ r['Notes'] or '' }}</td>
+      <td class="notes-cell"><div>{{ r['Notes'] or '' }}</div></td>
       <td class="no-print">
         <a href="/edit/{{ r['ItemID'] }}?return_to={{ return_to }}" class="btn btn-outline-primary btn-sm">Edit</a>
         <form method="post" action="/delete/{{ r['ItemID'] }}" class="d-inline"
@@ -392,10 +403,10 @@ TASK_FORM = BASE.replace("{% block content %}{% endblock %}", """
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-lg-7">
-    <h4 class="mb-3">{{ form_title }}</h4>
+    <h4 class="mb-2">{{ form_title }}</h4>
     <form method="post">
-      <div class="mb-3">
-        <label class="form-label">Project</label>
+      <div class="mb-1">
+        <label class="form-label mb-0">Project</label>
         <select name="project" id="project-select" class="form-select" onchange="toggleOther(this,'project-other')">
           <option value="">-- Select --</option>
           {% for p in projects %}
@@ -403,13 +414,13 @@ TASK_FORM = BASE.replace("{% block content %}{% endblock %}", """
           {% endfor %}
           <option value="__other__" {% if task.Project and task.Project not in projects %}selected{% endif %}>Other...</option>
         </select>
-        <input type="text" id="project-other" name="project_other" class="form-control mt-2"
+        <input type="text" id="project-other" name="project_other" class="form-control mt-1"
                placeholder="Enter new project name"
                value="{{ task.Project if task.Project and task.Project not in projects else '' }}"
                style="display:{% if task.Project and task.Project not in projects %}block{% else %}none{% endif %};">
       </div>
-      <div class="mb-3">
-        <label class="form-label">Who <small class="text-muted">(max 5 chars)</small></label>
+      <div class="mb-1">
+        <label class="form-label mb-0">Who <small class="text-muted">(max 5 chars)</small></label>
         <select name="who" id="who-select" class="form-select" onchange="toggleOther(this,'who-other')">
           <option value="">-- Select --</option>
           {% for w in whos %}
@@ -417,35 +428,37 @@ TASK_FORM = BASE.replace("{% block content %}{% endblock %}", """
           {% endfor %}
           <option value="__other__" {% if task.Who and task.Who not in whos %}selected{% endif %}>Other...</option>
         </select>
-        <input type="text" id="who-other" name="who_other" class="form-control mt-2"
+        <input type="text" id="who-other" name="who_other" class="form-control mt-1"
                placeholder="Enter new name (max 5 chars)" maxlength="5"
                value="{{ task.Who if task.Who and task.Who not in whos else '' }}"
                style="display:{% if task.Who and task.Who not in whos %}block{% else %}none{% endif %};">
       </div>
-      <div class="mb-3">
-        <label class="form-label">Status</label>
+      <div class="mb-1">
+        <label class="form-label mb-0">Status</label>
         <select name="status" class="form-select">
           {% for s in statuses %}
             <option value="{{ s }}" {% if s == (task.Status or 'Open') %}selected{% endif %}>{{ s }}</option>
           {% endfor %}
         </select>
       </div>
-      <div class="mb-3">
-        <label class="form-label">Priority <small class="text-muted">(1 low – 5 high)</small></label>
+      <div class="mb-1">
+        <label class="form-label mb-0">Priority <small class="text-muted">(1 low – 5 high)</small></label>
         <input type="number" name="priority" class="form-control" min="1" max="5"
                value="{{ task.Priority or 3 }}" required>
       </div>
-      <div class="mb-3">
-        <label class="form-label">Title / Action</label>
+      <div class="mb-1">
+        <label class="form-label mb-0">Title / Action</label>
         <input type="text" name="action" class="form-control" value="{{ task.Action or '' }}" required>
       </div>
-      <div class="mb-3">
-        <label class="form-label">Notes</label>
-        <textarea name="notes" class="form-control" rows="5">{{ task.Notes or '' }}</textarea>
+      <div class="mb-1">
+        <label class="form-label mb-0">Notes</label>
+        <textarea name="notes" class="form-control" rows="10">{{ task.Notes or '' }}</textarea>
       </div>
       <input type="hidden" name="return_to" value="{{ return_to }}">
+      <div class="mt-2">
       <button type="submit" class="btn btn-primary">Save</button>
       <a href="{{ return_to or '/' }}" class="btn btn-secondary ms-2">Cancel</a>
+      </div>
     </form>
   </div>
 </div>
