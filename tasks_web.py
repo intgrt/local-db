@@ -396,11 +396,31 @@ TASK_FORM = BASE.replace("{% block content %}{% endblock %}", """
     <form method="post">
       <div class="mb-3">
         <label class="form-label">Project</label>
-        <input type="text" name="project" class="form-control" value="{{ task.Project or '' }}" required>
+        <select name="project" id="project-select" class="form-select" onchange="toggleOther(this,'project-other')">
+          <option value="">-- Select --</option>
+          {% for p in projects %}
+            <option value="{{ p }}" {% if p == (task.Project or '') %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+          <option value="__other__" {% if task.Project and task.Project not in projects %}selected{% endif %}>Other...</option>
+        </select>
+        <input type="text" id="project-other" name="project_other" class="form-control mt-2"
+               placeholder="Enter new project name"
+               value="{{ task.Project if task.Project and task.Project not in projects else '' }}"
+               style="display:{% if task.Project and task.Project not in projects %}block{% else %}none{% endif %};">
       </div>
       <div class="mb-3">
         <label class="form-label">Who <small class="text-muted">(max 5 chars)</small></label>
-        <input type="text" name="who" class="form-control" maxlength="5" value="{{ task.Who or '' }}">
+        <select name="who" id="who-select" class="form-select" onchange="toggleOther(this,'who-other')">
+          <option value="">-- Select --</option>
+          {% for w in whos %}
+            <option value="{{ w }}" {% if w == (task.Who or '') %}selected{% endif %}>{{ w }}</option>
+          {% endfor %}
+          <option value="__other__" {% if task.Who and task.Who not in whos %}selected{% endif %}>Other...</option>
+        </select>
+        <input type="text" id="who-other" name="who_other" class="form-control mt-2"
+               placeholder="Enter new name (max 5 chars)" maxlength="5"
+               value="{{ task.Who if task.Who and task.Who not in whos else '' }}"
+               style="display:{% if task.Who and task.Who not in whos %}block{% else %}none{% endif %};">
       </div>
       <div class="mb-3">
         <label class="form-label">Status</label>
@@ -429,6 +449,29 @@ TASK_FORM = BASE.replace("{% block content %}{% endblock %}", """
     </form>
   </div>
 </div>
+<script>
+function toggleOther(sel, otherId) {
+  const other = document.getElementById(otherId);
+  if (sel.value === '__other__') {
+    other.style.display = 'block';
+    other.focus();
+  } else {
+    other.style.display = 'none';
+  }
+}
+// Before submit: copy "other" text inputs into the select value so POST picks them up
+document.querySelector('form').addEventListener('submit', function() {
+  ['project', 'who'].forEach(function(field) {
+    const sel = document.getElementById(field + '-select');
+    const other = document.getElementById(field + '-other');
+    if (sel && sel.value === '__other__' && other && other.value.trim()) {
+      sel.value = other.value.trim();
+      sel.name = field;
+      other.disabled = true;
+    }
+  });
+});
+</script>
 {% endblock %}
 """)
 
@@ -441,8 +484,8 @@ def task_list():
     q = request.args.get("q", "").strip()
     sel_project = request.args.get("project", "")
     sel_who = request.args.get("who", "")
-    sel_statuses = request.args.getlist("status") or list(ALLOWED_STATUS)
-    sort = request.args.get("sort", "ItemID")
+    sel_statuses = request.args.getlist("status") or ["Open", "IP", "Wait"]
+    sort = request.args.get("sort", "Priority")
     direction = request.args.get("dir", "desc")
 
     # Build return_to so edit/delete can restore this exact view
@@ -455,7 +498,7 @@ def task_list():
         qs_parts.append(("who", sel_who))
     for s in sel_statuses:
         qs_parts.append(("status", s))
-    if sort != "ItemID":
+    if sort != "Priority":
         qs_parts.append(("sort", sort))
     if direction != "desc":
         qs_parts.append(("dir", direction))
@@ -521,6 +564,8 @@ def add_task():
         form_title="Add Task",
         task=Empty(),
         statuses=ALLOWED_STATUS,
+        projects=get_distinct("Project"),
+        whos=get_distinct("Who"),
         return_to=return_to,
     )
 
@@ -548,6 +593,8 @@ def edit_task(item_id):
         form_title=f"Edit Task #{item_id}",
         task=row,
         statuses=ALLOWED_STATUS,
+        projects=get_distinct("Project"),
+        whos=get_distinct("Who"),
         return_to=return_to,
     )
 
