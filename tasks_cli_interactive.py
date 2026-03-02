@@ -1,8 +1,6 @@
 import os
-import sqlite3
 import subprocess
 import json
-from pathlib import Path
 
 try:
     import pyperclip
@@ -10,9 +8,13 @@ try:
 except Exception:
     HAS_CLIP = False
 
-DB = r"D:\Datafiles5\softwarebuilds_other\Local_Task__List\tasks.db"
+from tasks_db import (
+    ALLOWED_STATUS, ensure_project_column,
+    get_distinct, fetch_one, insert_task, count_open_tasks,
+    run_search_query,
+)
+
 MODEL = "qwen3:8b"
-ALLOWED_STATUS = ["Open", "IP", "Wait", "Done", "Deferred"]
 
 # CMD cosmetics (Windows CMD)
 CMD_COLOR = "B0"  # background=B (bright acqua), foreground=0 (black)
@@ -21,23 +23,6 @@ CMD_COLOR = "B0"  # background=B (bright acqua), foreground=0 (black)
 def set_cmd_ui(title: str):
     os.system(f"color {CMD_COLOR}")
     os.system(f'title {title}')
-
-
-def db_connect():
-    p = Path(DB)
-    if not p.exists():
-        raise SystemExit(f"DB not found: {p}")
-    return sqlite3.connect(DB)
-
-
-def ensure_project_column():
-    con = db_connect()
-    cur = con.cursor()
-    cols = [r[1] for r in cur.execute("PRAGMA table_info(ActionList)").fetchall()]
-    if "Project" not in cols:
-        cur.execute("ALTER TABLE ActionList ADD COLUMN Project TEXT;")
-        con.commit()
-    con.close()
 
 
 def prompt(text, default=None, required=False):
@@ -104,19 +89,6 @@ def prompt_menu(label, options, default_index=1, allow_custom=False):
 
         print("Invalid selection.")
 
-
-def get_distinct(column):
-    if column not in {"Project", "Who"}:
-        raise ValueError("Unsupported column.")
-    con = db_connect()
-    cur = con.cursor()
-    rows = cur.execute(
-        f"SELECT DISTINCT {column} FROM ActionList "
-        f"WHERE {column} IS NOT NULL AND TRIM({column}) <> '' "
-        f"ORDER BY {column} COLLATE NOCASE"
-    ).fetchall()
-    con.close()
-    return [r[0] for r in rows if isinstance(r[0], str) and r[0].strip()]
 
 
 def run_ollama(prompt_text):
@@ -207,40 +179,6 @@ def summarize_clipboard(text):
     return title, notes
 
 
-def insert_task(project, who, status, priority, title, notes):
-    con = db_connect()
-    cur = con.cursor()
-    cur.execute(
-        "INSERT INTO ActionList (Project, Who, Status, Priority, Action, Notes) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (project, who[:5], status, priority, title, notes),
-    )
-    con.commit()
-    item_id = cur.lastrowid
-    con.close()
-    return item_id
-
-
-def count_open_tasks():
-    con = db_connect()
-    cur = con.cursor()
-    n = cur.execute("SELECT COUNT(*) FROM ActionList WHERE Status <> 'Done'").fetchone()[0]
-    con.close()
-    return int(n)
-
-
-def fetch_item(item_id: int):
-    con = db_connect()
-    con.row_factory = sqlite3.Row
-    cur = con.cursor()
-    row = cur.execute(
-        "SELECT ItemID, Project, Who, Status, Priority, Action, Notes "
-        "FROM ActionList WHERE ItemID = ?",
-        (item_id,),
-    ).fetchone()
-    con.close()
-    return row
-
 
 def print_item_full(row):
     print("\n=== ITEM DETAIL ===")
@@ -255,30 +193,6 @@ def print_item_full(row):
     print("===================\n")
 
 
-def run_search_query(q: str):
-    like = f"%{q}%"
-    con = db_connect()
-    con.row_factory = sqlite3.Row
-    cur = con.cursor()
-    rows = cur.execute(
-        """
-        SELECT ItemID, Project, Who, Status, Priority, Action
-        FROM ActionList
-        WHERE COALESCE(Project,'') LIKE ?
-           OR COALESCE(Action,'')  LIKE ?
-           OR COALESCE(Notes,'')   LIKE ?
-           OR COALESCE(Who,'')     LIKE ?
-        ORDER BY
-            CASE Status WHEN 'Open' THEN 1 WHEN 'IP' THEN 2 WHEN 'Wait' THEN 3 WHEN 'Done' THEN 4 ELSE 5 END,
-            Priority ASC,
-            ItemID DESC
-        LIMIT 50
-        """,
-        (like, like, like, like),
-    ).fetchall()
-    con.close()
-    return rows
-
 
 def do_search(initial_q=None):
     if initial_q:
@@ -289,7 +203,7 @@ def do_search(initial_q=None):
     while True:
         rows = run_search_query(q)
 
-        print("\n=== SEARCH RESULTS (up to 50) ===")
+        print("\n=== SEARCH RESULTS ===")
         if not rows:
             print("(no matches)")
         else:
@@ -325,7 +239,7 @@ def do_search(initial_q=None):
                 print("That ItemID is not in the current search results.")
                 continue
 
-            row = fetch_item(item_id)
+            row = fetch_one(item_id)
             if not row:
                 print("Item no longer exists.")
                 continue

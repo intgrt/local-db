@@ -1,42 +1,32 @@
 import sys
 import os
-sys.path.insert(0, os.path.dirname(__file__))
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from flask import Flask, render_template_string, request, redirect, url_for, abort
+from flask import Flask, render_template_string, request, redirect, abort
 from urllib.parse import urlencode, quote, unquote
-from tasks_cli_interactive import db_connect, ALLOWED_STATUS
+from tasks_db import (
+    ALLOWED_STATUS, db_connect, get_distinct, fetch_one,
+    insert_task, run_search_query,
+)
 
 app = Flask(__name__)
 
 # ---------------------------------------------------------------------------
-# DB helpers
+# DB helpers (web-only — shared helpers imported from tasks_db)
 # ---------------------------------------------------------------------------
 
-def get_distinct(column):
-    if column not in {"Project", "Who"}:
-        raise ValueError("Unsupported column.")
-    con = db_connect()
-    cur = con.cursor()
-    rows = cur.execute(
-        f"SELECT DISTINCT {column} FROM ActionList "
-        f"WHERE {column} IS NOT NULL AND TRIM({column}) <> '' "
-        f"ORDER BY {column} COLLATE NOCASE"
-    ).fetchall()
-    con.close()
-    return [r[0] for r in rows]
-
-
 def fetch_all(project=None, who=None, statuses=None, sort="ItemID", direction="desc"):
+    from tasks_db import STATUS_ORDER
+    import sqlite3
     allowed_cols = {"ItemID", "Project", "Who", "Status", "Priority", "Action"}
     if sort not in allowed_cols:
         sort = "ItemID"
     if direction not in ("asc", "desc"):
         direction = "desc"
 
-    status_order = "CASE Status WHEN 'Open' THEN 1 WHEN 'IP' THEN 2 WHEN 'Wait' THEN 3 WHEN 'Done' THEN 4 ELSE 5 END"
-
     con = db_connect()
-    con.row_factory = __import__("sqlite3").Row
+    con.row_factory = sqlite3.Row
     cur = con.cursor()
 
     wheres = []
@@ -55,7 +45,7 @@ def fetch_all(project=None, who=None, statuses=None, sort="ItemID", direction="d
     where_clause = ("WHERE " + " AND ".join(wheres)) if wheres else ""
 
     if sort == "Status":
-        order_clause = f"ORDER BY {status_order} {direction.upper()}, Priority ASC"
+        order_clause = f"ORDER BY {STATUS_ORDER} {direction.upper()}, Priority ASC"
     else:
         order_clause = f"ORDER BY {sort} {direction.upper()}"
 
@@ -66,32 +56,6 @@ def fetch_all(project=None, who=None, statuses=None, sort="ItemID", direction="d
     ).fetchall()
     con.close()
     return rows
-
-
-def fetch_one(item_id):
-    con = db_connect()
-    con.row_factory = __import__("sqlite3").Row
-    cur = con.cursor()
-    row = cur.execute(
-        "SELECT ItemID, Project, Who, Status, Priority, Action, Notes "
-        "FROM ActionList WHERE ItemID = ?", (item_id,)
-    ).fetchone()
-    con.close()
-    return row
-
-
-def insert_task(project, who, status, priority, action, notes):
-    con = db_connect()
-    cur = con.cursor()
-    cur.execute(
-        "INSERT INTO ActionList (Project, Who, Status, Priority, Action, Notes) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (project, who[:5], status, int(priority), action, notes),
-    )
-    con.commit()
-    item_id = cur.lastrowid
-    con.close()
-    return item_id
 
 
 def update_task(item_id, project, who, status, priority, action, notes):
@@ -130,12 +94,15 @@ BASE = """
     body { padding-top: 60px; }
     .table th a { color: inherit; text-decoration: none; }
     .table th a:hover { text-decoration: underline; }
-    .badge-Open     { background-color: #0d6efd; }
-    .badge-IP       { background-color: #fd7e14; }
-    .badge-Wait     { background-color: #6c757d; }
-    .badge-Done     { background-color: #198754; }
-    .badge-Deferred { background-color: #adb5bd; color: #000; }
+    .badge-Open  { background-color: #0d6efd; }
+    .badge-IP    { background-color: #fd7e14; }
+    .badge-Wait  { background-color: #6c757d; }
+    .badge-Done  { background-color: #198754; }
+    .badge-Defrd { background-color: #adb5bd; color: #000; }
+    .badge-Cncld { background-color: #6f42c1; }
     .notes-cell { max-width: 300px; white-space: pre-wrap; font-size: 0.85em; }
+    /* Remove chevron arrow from inline table dropdowns */
+    td .form-select { background-image: none; padding-right: 0.5rem; }
 
     /* Column resize */
     .resizable-table th { position: relative; overflow: hidden; }
@@ -153,11 +120,12 @@ BASE = """
       .no-print { display: none !important; }
       nav { display: none !important; }
       body { padding-top: 0 !important; }
-      .badge-Open     { background-color: #0d6efd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .badge-IP       { background-color: #fd7e14 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .badge-Wait     { background-color: #6c757d !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .badge-Done     { background-color: #198754 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .badge-Deferred { background-color: #adb5bd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-Open  { background-color: #0d6efd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-IP    { background-color: #fd7e14 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-Wait  { background-color: #6c757d !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-Done  { background-color: #198754 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-Defrd { background-color: #adb5bd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-Cncld { background-color: #6f42c1 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .table-dark th  { background-color: #212529 !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       table { width: 100% !important; font-size: 10pt; }
       .print-header { display: block !important; }
@@ -213,8 +181,13 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
 <!-- Filters -->
 <form method="get" class="row g-2 mb-3 align-items-end no-print">
   <div class="col-auto">
+    <label class="form-label mb-1 small">Search</label>
+    <input type="text" name="q" class="form-control form-control-sm" placeholder="Project / Title / Notes / Who"
+           value="{{ q }}" style="min-width:220px;">
+  </div>
+  <div class="col-auto">
     <label class="form-label mb-1 small">Project</label>
-    <select name="project" class="form-select form-select-sm">
+    <select name="project" class="form-select form-select-sm" {% if q %}disabled{% endif %}>
       <option value="">All Projects</option>
       {% for p in projects %}
         <option value="{{ p }}" {% if p == sel_project %}selected{% endif %}>{{ p }}</option>
@@ -223,14 +196,14 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
   </div>
   <div class="col-auto">
     <label class="form-label mb-1 small">User</label>
-    <select name="who" class="form-select form-select-sm">
+    <select name="who" class="form-select form-select-sm" {% if q %}disabled{% endif %}>
       <option value="">All Users</option>
       {% for w in whos %}
         <option value="{{ w }}" {% if w == sel_who %}selected{% endif %}>{{ w }}</option>
       {% endfor %}
     </select>
   </div>
-  <div class="col-auto">
+  <div class="col-auto" {% if q %}style="opacity:0.4;pointer-events:none;"{% endif %}>
     <label class="form-label mb-1 small">Status</label>
     <div class="d-flex flex-wrap gap-2 pt-1">
       {% for s in all_statuses %}
@@ -243,10 +216,15 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
     </div>
   </div>
   <div class="col-auto">
-    <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
+    <button type="submit" class="btn btn-secondary btn-sm">Go</button>
     <a href="/" class="btn btn-outline-secondary btn-sm">Clear</a>
   </div>
 </form>
+{% if q %}
+<div class="alert alert-info py-1 px-2 mb-2 no-print small">
+  Searching: <strong>{{ q }}</strong> &mdash; {{ rows|length }} result(s)
+</div>
+{% endif %}
 
 <!-- Table -->
 <div class="table-responsive">
@@ -254,8 +232,8 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
   <thead class="table-dark">
     <tr>
       {% for col, label in columns %}
-        <th style="min-width:40px;">
-          <span class="no-print">
+        {% if col in ('Who', 'Status', 'Priority') %}
+          <th class="no-print" style="min-width:40px;">
             {% if sort == col and direction == 'asc' %}
               <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=desc{% for s in sel_statuses %}&status={{ s }}{% endfor %}">{{ label }} ▲</a>
             {% elif sort == col %}
@@ -263,10 +241,24 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
             {% else %}
               <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=asc{% for s in sel_statuses %}&status={{ s }}{% endfor %}">{{ label }}</a>
             {% endif %}
-          </span>
-          <span class="print-only" style="display:none;">{{ label }}</span>
-          <div class="resize-handle no-print"></div>
-        </th>
+            <div class="resize-handle"></div>
+          </th>
+          <th class="print-who print-status print-priority" style="display:none;">{{ label }}</th>
+        {% else %}
+          <th style="min-width:40px;">
+            <span class="no-print">
+              {% if sort == col and direction == 'asc' %}
+                <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=desc{% for s in sel_statuses %}&status={{ s }}{% endfor %}">{{ label }} ▲</a>
+              {% elif sort == col %}
+                <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=asc{% for s in sel_statuses %}&status={{ s }}{% endfor %}">{{ label }} ▼</a>
+              {% else %}
+                <a href="?project={{ sel_project }}&who={{ sel_who }}&sort={{ col }}&dir=asc{% for s in sel_statuses %}&status={{ s }}{% endfor %}">{{ label }}</a>
+              {% endif %}
+            </span>
+            <span class="print-only" style="display:none;">{{ label }}</span>
+            <div class="resize-handle no-print"></div>
+          </th>
+        {% endif %}
       {% endfor %}
       <th style="min-width:80px;">Notes<div class="resize-handle no-print"></div></th>
       <th class="no-print">Actions</th>
@@ -274,12 +266,48 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
   </thead>
   <tbody>
     {% for r in rows %}
-    <tr>
+    <tr id="row-{{ r['ItemID'] }}">
       <td>{{ r['ItemID'] }}</td>
       <td>{{ r['Project'] or '' }}</td>
-      <td>{{ r['Who'] or '' }}</td>
-      <td><span class="badge badge-{{ r['Status'] }}">{{ r['Status'] }}</span></td>
-      <td>{{ r['Priority'] }}</td>
+      <td class="no-print">
+        <form method="post" action="/quick-update/{{ r['ItemID'] }}">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <input type="hidden" name="anchor" value="row-{{ r['ItemID'] }}">
+          <select name="who" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:70px;">
+            {% for w in whos %}
+              <option value="{{ w }}" {% if w == r['Who'] %}selected{% endif %}>{{ w }}</option>
+            {% endfor %}
+            {% if r['Who'] not in whos %}
+              <option value="{{ r['Who'] }}" selected>{{ r['Who'] }}</option>
+            {% endif %}
+          </select>
+        </form>
+      </td>
+      <td class="print-who" style="display:none;">{{ r['Who'] or '' }}</td>
+      <td class="no-print">
+        <form method="post" action="/quick-update/{{ r['ItemID'] }}">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <input type="hidden" name="anchor" value="row-{{ r['ItemID'] }}">
+          <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+            {% for s in all_statuses %}
+              <option value="{{ s }}" {% if s == r['Status'] %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </form>
+      </td>
+      <td class="print-status" style="display:none;"><span class="badge badge-{{ r['Status'] }}">{{ r['Status'] }}</span></td>
+      <td class="no-print">
+        <form method="post" action="/quick-update/{{ r['ItemID'] }}">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <input type="hidden" name="anchor" value="row-{{ r['ItemID'] }}">
+          <select name="priority" class="form-select form-select-sm" onchange="this.form.submit()" style="min-width:60px;">
+            {% for p in [1,2,3,4,5] %}
+              <option value="{{ p }}" {% if p == r['Priority'] %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+          </select>
+        </form>
+      </td>
+      <td class="print-priority" style="display:none;">{{ r['Priority'] }}</td>
       <td>{{ r['Action'] or '' }}</td>
       <td class="notes-cell">{{ r['Notes'] or '' }}</td>
       <td class="no-print">
@@ -297,11 +325,39 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
 </div>
 
 <style>
-  @media print { .print-only { display: inline !important; } }
+  @media print {
+    .print-only { display: inline !important; }
+    .print-who, .print-status, .print-priority { display: table-cell !important; }
+  }
 </style>
 
 <script>
 (function() {
+  // Scroll to anchor after quick-update redirect
+  if (window.location.hash) {
+    const el = document.querySelector(window.location.hash);
+    if (el) el.scrollIntoView({ block: 'center' });
+  }
+
+  // Status dropdown colours
+  const STATUS_COLORS = {
+    'Open':  { bg: '#0d6efd', color: '#fff' },
+    'IP':    { bg: '#fd7e14', color: '#fff' },
+    'Wait':  { bg: '#6c757d', color: '#fff' },
+    'Done':  { bg: '#198754', color: '#fff' },
+    'Defrd': { bg: '#adb5bd', color: '#000' },
+    'Cncld': { bg: '#6f42c1', color: '#fff' },
+  };
+  function applyStatusColor(sel) {
+    const c = STATUS_COLORS[sel.value];
+    if (c) { sel.style.backgroundColor = c.bg; sel.style.color = c.color; }
+    else   { sel.style.backgroundColor = ''; sel.style.color = ''; }
+  }
+  document.querySelectorAll('select[name="status"]').forEach(sel => {
+    applyStatusColor(sel);
+    sel.addEventListener('change', () => applyStatusColor(sel));
+  });
+
   // Column resize
   const table = document.getElementById('task-table');
   if (!table) return;
@@ -382,6 +438,7 @@ TASK_FORM = BASE.replace("{% block content %}{% endblock %}", """
 
 @app.route("/")
 def task_list():
+    q = request.args.get("q", "").strip()
     sel_project = request.args.get("project", "")
     sel_who = request.args.get("who", "")
     sel_statuses = request.args.getlist("status") or list(ALLOWED_STATUS)
@@ -390,6 +447,8 @@ def task_list():
 
     # Build return_to so edit/delete can restore this exact view
     qs_parts = []
+    if q:
+        qs_parts.append(("q", q))
     if sel_project:
         qs_parts.append(("project", sel_project))
     if sel_who:
@@ -402,13 +461,17 @@ def task_list():
         qs_parts.append(("dir", direction))
     return_to = quote("/?" + urlencode(qs_parts), safe="") if qs_parts else "%2F"
 
-    rows = fetch_all(
-        project=sel_project or None,
-        who=sel_who or None,
-        statuses=sel_statuses,
-        sort=sort,
-        direction=direction,
-    )
+    if q:
+        rows = run_search_query(q)
+    else:
+        rows = fetch_all(
+            project=sel_project or None,
+            who=sel_who or None,
+            statuses=sel_statuses,
+            sort=sort,
+            direction=direction,
+        )
+
     columns = [
         ("ItemID", "ID"),
         ("Project", "Project"),
@@ -423,6 +486,7 @@ def task_list():
         projects=get_distinct("Project"),
         whos=get_distinct("Who"),
         all_statuses=ALLOWED_STATUS,
+        q=q,
         sel_project=sel_project,
         sel_who=sel_who,
         sel_statuses=sel_statuses,
@@ -486,6 +550,22 @@ def edit_task(item_id):
         statuses=ALLOWED_STATUS,
         return_to=return_to,
     )
+
+
+@app.route("/quick-update/<int:item_id>", methods=["POST"])
+def quick_update(item_id):
+    row = fetch_one(item_id)
+    if row is None:
+        abort(404)
+    # Apply only the field(s) submitted; keep existing values for the rest
+    who = request.form.get("who", row["Who"] or "").strip()
+    status = request.form.get("status", row["Status"] or "Open")
+    priority = request.form.get("priority", row["Priority"] or 3)
+    update_task(item_id, row["Project"] or "", who, status, priority,
+                row["Action"] or "", row["Notes"] or "")
+    anchor = request.form.get("anchor", f"row-{item_id}")
+    return_to = unquote(request.form.get("return_to", "%2F"))
+    return redirect(return_to + f"#{anchor}")
 
 
 @app.route("/delete/<int:item_id>", methods=["POST"])
