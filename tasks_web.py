@@ -17,6 +17,7 @@ app = Flask(__name__)
 # DB helpers (web-only — shared helpers imported from tasks_db)
 # ---------------------------------------------------------------------------
 
+# @agent:TaskRead:extension
 def fetch_all(project=None, who=None, statuses=None, sort="ItemID", direction="desc"):
     from tasks_db import STATUS_ORDER
     import sqlite3
@@ -59,6 +60,7 @@ def fetch_all(project=None, who=None, statuses=None, sort="ItemID", direction="d
     return rows
 
 
+# @agent:TaskWrite:extension
 def update_task(item_id, project, who, status, priority, action, notes):
     con = db_connect()
     con.row_factory = None
@@ -88,6 +90,7 @@ def delete_task(item_id):
 # Base template
 # ---------------------------------------------------------------------------
 
+# @agent:BaseTemplate:authority
 BASE = """
 <!doctype html>
 <html lang="en">
@@ -166,6 +169,7 @@ BASE = """
 # Task list template
 # ---------------------------------------------------------------------------
 
+# @agent:TaskListTemplate:authority
 TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
 {% block content %}
 
@@ -501,6 +505,7 @@ document.querySelector('form').addEventListener('submit', function() {
 # Routes
 # ---------------------------------------------------------------------------
 
+# @agent:TaskListRoute:entry
 @app.route("/")
 def task_list():
     q = request.args.get("q", "").strip()
@@ -563,6 +568,7 @@ def task_list():
     )
 
 
+# @agent:TaskAddRoute:entry
 @app.route("/add", methods=["GET", "POST"])
 def add_task():
     if request.method == "POST":
@@ -593,6 +599,7 @@ def add_task():
     )
 
 
+# @agent:TaskEditRoute:entry
 @app.route("/edit/<int:item_id>", methods=["GET", "POST"])
 def edit_task(item_id):
     row = fetch_one(item_id)
@@ -622,6 +629,7 @@ def edit_task(item_id):
     )
 
 
+# @agent:TaskQuickUpdateRoute:entry
 @app.route("/quick-update/<int:item_id>", methods=["POST"])
 def quick_update(item_id):
     row = fetch_one(item_id)
@@ -638,6 +646,7 @@ def quick_update(item_id):
     return redirect(return_to + f"#{anchor}")
 
 
+# @agent:TaskDeleteRoute:entry
 @app.route("/delete/<int:item_id>", methods=["POST"])
 def delete_task_route(item_id):
     row = fetch_one(item_id)
@@ -648,6 +657,7 @@ def delete_task_route(item_id):
     return redirect(return_to)
 
 
+# @agent:StatusHistoryRoute:entry
 @app.route("/history/<int:item_id>")
 def status_history(item_id):
     task = fetch_one(item_id)

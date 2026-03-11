@@ -4,6 +4,7 @@ from pathlib import Path
 
 DB = r"D:\Datafiles5\softwarebuilds_other\Local_Task__List\tasks.db"
 
+# @agent:StatusConfig:authority
 ALLOWED_STATUS = ["Open", "IP", "Wait", "Revw", "Done", "Defrd", "Cncld"]
 
 STATUS_ORDER = (
@@ -19,6 +20,7 @@ STATUS_ORDER = (
 )
 
 
+# @agent:DbConnect:authority
 def db_connect():
     p = Path(DB)
     if not p.exists():
@@ -26,6 +28,7 @@ def db_connect():
     return sqlite3.connect(DB)
 
 
+# @agent:StatusHistory:authority
 def ensure_status_history_table():
     con = db_connect()
     cur = con.cursor()
@@ -41,6 +44,7 @@ def ensure_status_history_table():
     con.close()
 
 
+# @agent:StatusHistory:extension
 def log_status_change(cur, item_id, status):
     cur.execute(
         "INSERT INTO status_history (item_id, status, changed_at) VALUES (?, ?, ?)",
@@ -72,6 +76,7 @@ def get_distinct(column):
     return [r[0] for r in rows if isinstance(r[0], str) and r[0].strip()]
 
 
+# @agent:TaskRead:authority
 def fetch_one(item_id: int):
     con = db_connect()
     con.row_factory = sqlite3.Row
@@ -85,6 +90,7 @@ def fetch_one(item_id: int):
     return row
 
 
+# @agent:TaskWrite:authority
 def insert_task(project, who, status, priority, title, notes):
     con = db_connect()
     cur = con.cursor()
@@ -100,6 +106,7 @@ def insert_task(project, who, status, priority, title, notes):
     return item_id
 
 
+# @agent:StatusHistory:extension
 def fetch_status_history(item_id: int):
     con = db_connect()
     con.row_factory = sqlite3.Row
@@ -122,6 +129,7 @@ def count_open_tasks():
     return int(n)
 
 
+# @agent:TaskRead:extension
 def run_search_query(q: str):
     like = f"%{q}%"
     con = db_connect()

@@ -194,6 +194,7 @@ def print_item_full(row):
 
 
 
+# @agent:CliSearch:authority
 def do_search(initial_q=None):
     if initial_q:
         q = initial_q
@@ -256,6 +257,7 @@ def do_search(initial_q=None):
         print("Invalid selection.")
 
 
+# @agent:CliAdd:authority
 def do_add():
     default_project = "Project X"
     default_who = "RM"
@@ -325,6 +327,7 @@ def do_add():
     input("\nPress Enter to return...")
 
 
+# @agent:CliHistory:authority
 def do_history():
     raw = input("ItemID: ").strip()
     if not raw.isdigit():
@@ -350,6 +353,7 @@ def do_history():
     input("\nPress Enter to return...")
 
 
+# @agent:CliMain:entry
 def main():
     ensure_project_column()
     ensure_status_history_table()
