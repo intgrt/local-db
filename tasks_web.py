@@ -7,7 +7,8 @@ from flask import Flask, render_template_string, request, redirect, abort
 from urllib.parse import urlencode, quote, unquote
 from tasks_db import (
     ALLOWED_STATUS, db_connect, get_distinct, fetch_one,
-    insert_task, run_search_query,
+    insert_task, run_search_query, log_status_change, ensure_status_history_table,
+    fetch_status_history,
 )
 
 app = Flask(__name__)
@@ -60,12 +61,17 @@ def fetch_all(project=None, who=None, statuses=None, sort="ItemID", direction="d
 
 def update_task(item_id, project, who, status, priority, action, notes):
     con = db_connect()
+    con.row_factory = None
     cur = con.cursor()
+    row = cur.execute("SELECT Status FROM ActionList WHERE ItemID=?", (item_id,)).fetchone()
+    old_status = row[0] if row else None
     cur.execute(
         "UPDATE ActionList SET Project=?, Who=?, Status=?, Priority=?, Action=?, Notes=? "
         "WHERE ItemID=?",
         (project, who[:5], status, int(priority), action, notes, item_id),
     )
+    if status != old_status:
+        log_status_change(cur, item_id, status)
     con.commit()
     con.close()
 
@@ -97,6 +103,7 @@ BASE = """
     .badge-Open  { background-color: #0d6efd; }
     .badge-IP    { background-color: #fd7e14; }
     .badge-Wait  { background-color: #6c757d; }
+    .badge-Revw  { background-color: #0d9488; }
     .badge-Done  { background-color: #198754; }
     .badge-Defrd { background-color: #adb5bd; color: #000; }
     .badge-Cncld { background-color: #6f42c1; }
@@ -124,6 +131,7 @@ BASE = """
       .badge-Open  { background-color: #0d6efd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .badge-IP    { background-color: #fd7e14 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .badge-Wait  { background-color: #6c757d !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .badge-Revw  { background-color: #0d9488 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .badge-Done  { background-color: #198754 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .badge-Defrd { background-color: #adb5bd !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .badge-Cncld { background-color: #6f42c1 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -218,7 +226,7 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
   </div>
   <div class="col-auto">
     <button type="submit" class="btn btn-secondary btn-sm">Go</button>
-    <a href="/" class="btn btn-outline-secondary btn-sm">Clear</a>
+    <a href="/?cleared=1" class="btn btn-outline-secondary btn-sm">Clear</a>
   </div>
 </form>
 {% if q %}
@@ -278,7 +286,7 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
   <tbody>
     {% for r in rows %}
     <tr id="row-{{ r['ItemID'] }}">
-      <td>{{ r['ItemID'] }}</td>
+      <td><a href="/history/{{ r['ItemID'] }}?return_to={{ return_to }}" class="text-decoration-none">{{ r['ItemID'] }}</a></td>
       <td>{{ r['Project'] or '' }}</td>
       <td class="no-print">
         <form method="post" action="/quick-update/{{ r['ItemID'] }}">
@@ -355,6 +363,7 @@ TASK_LIST = BASE.replace("{% block content %}{% endblock %}", """
     'Open':  { bg: '#0d6efd', color: '#fff' },
     'IP':    { bg: '#fd7e14', color: '#fff' },
     'Wait':  { bg: '#6c757d', color: '#fff' },
+    'Revw':  { bg: '#0d9488', color: '#fff' },
     'Done':  { bg: '#198754', color: '#fff' },
     'Defrd': { bg: '#adb5bd', color: '#000' },
     'Cncld': { bg: '#6f42c1', color: '#fff' },
@@ -497,7 +506,8 @@ def task_list():
     q = request.args.get("q", "").strip()
     sel_project = request.args.get("project", "")
     sel_who = request.args.get("who", "")
-    sel_statuses = request.args.getlist("status") or ["Open", "IP", "Wait"]
+    cleared = request.args.get("cleared") == "1"
+    sel_statuses = request.args.getlist("status") or ([] if cleared else ["Open", "IP", "Wait"])
     sort = request.args.get("sort", "Priority")
     direction = request.args.get("dir", "desc")
 
@@ -638,7 +648,51 @@ def delete_task_route(item_id):
     return redirect(return_to)
 
 
+@app.route("/history/<int:item_id>")
+def status_history(item_id):
+    task = fetch_one(item_id)
+    if task is None:
+        abort(404)
+    history = fetch_status_history(item_id)
+    return_to = request.args.get("return_to", "/")
+    return render_template_string("""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Status History — #{{ task['ItemID'] }}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+</head>
+<body class="p-4">
+  <div class="container" style="max-width:600px;">
+    <h5 class="mb-1">Status History</h5>
+    <p class="text-muted mb-3"><strong>#{{ task['ItemID'] }}</strong> — {{ task['Action'] }}</p>
+    {% if history %}
+    <table class="table table-sm table-bordered">
+      <thead class="table-dark">
+        <tr><th>Status</th><th>Date / Time</th></tr>
+      </thead>
+      <tbody>
+        {% for h in history %}
+        <tr>
+          <td>{{ h['status'] }}</td>
+          <td>{{ h['changed_at'] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted">No history recorded for this task.</p>
+    {% endif %}
+    <a href="{{ return_to }}" class="btn btn-outline-secondary btn-sm mt-2">Back</a>
+  </div>
+</body>
+</html>
+""", task=task, history=history, return_to=return_to)
+
+
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    ensure_status_history_table()
     app.run(debug=True, port=5000)

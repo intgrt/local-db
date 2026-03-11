@@ -1,19 +1,21 @@
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 DB = r"D:\Datafiles5\softwarebuilds_other\Local_Task__List\tasks.db"
 
-ALLOWED_STATUS = ["Open", "IP", "Wait", "Done", "Defrd", "Cncld"]
+ALLOWED_STATUS = ["Open", "IP", "Wait", "Revw", "Done", "Defrd", "Cncld"]
 
 STATUS_ORDER = (
     "CASE Status "
     "WHEN 'Open'  THEN 1 "
     "WHEN 'IP'    THEN 2 "
     "WHEN 'Wait'  THEN 3 "
-    "WHEN 'Done'  THEN 4 "
-    "WHEN 'Defrd' THEN 5 "
-    "WHEN 'Cncld' THEN 6 "
-    "ELSE 7 END"
+    "WHEN 'Revw'  THEN 4 "
+    "WHEN 'Done'  THEN 5 "
+    "WHEN 'Defrd' THEN 6 "
+    "WHEN 'Cncld' THEN 7 "
+    "ELSE 8 END"
 )
 
 
@@ -22,6 +24,28 @@ def db_connect():
     if not p.exists():
         raise SystemExit(f"DB not found: {p}")
     return sqlite3.connect(DB)
+
+
+def ensure_status_history_table():
+    con = db_connect()
+    cur = con.cursor()
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS status_history ("
+        "  id         INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "  item_id    INTEGER NOT NULL, "
+        "  status     TEXT NOT NULL, "
+        "  changed_at TEXT NOT NULL"
+        ")"
+    )
+    con.commit()
+    con.close()
+
+
+def log_status_change(cur, item_id, status):
+    cur.execute(
+        "INSERT INTO status_history (item_id, status, changed_at) VALUES (?, ?, ?)",
+        (item_id, status, datetime.now().isoformat(timespec="seconds")),
+    )
 
 
 def ensure_project_column():
@@ -69,10 +93,23 @@ def insert_task(project, who, status, priority, title, notes):
         "VALUES (?, ?, ?, ?, ?, ?)",
         (project, who[:5], status, int(priority), title, notes),
     )
-    con.commit()
     item_id = cur.lastrowid
+    log_status_change(cur, item_id, status)
+    con.commit()
     con.close()
     return item_id
+
+
+def fetch_status_history(item_id: int):
+    con = db_connect()
+    con.row_factory = sqlite3.Row
+    cur = con.cursor()
+    rows = cur.execute(
+        "SELECT status, changed_at FROM status_history WHERE item_id=? ORDER BY id ASC",
+        (item_id,),
+    ).fetchall()
+    con.close()
+    return rows
 
 
 def count_open_tasks():

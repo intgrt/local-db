@@ -9,9 +9,9 @@ except Exception:
     HAS_CLIP = False
 
 from tasks_db import (
-    ALLOWED_STATUS, ensure_project_column,
+    ALLOWED_STATUS, ensure_project_column, ensure_status_history_table,
     get_distinct, fetch_one, insert_task, count_open_tasks,
-    run_search_query,
+    run_search_query, fetch_status_history,
 )
 
 MODEL = "qwen3:8b"
@@ -325,8 +325,34 @@ def do_add():
     input("\nPress Enter to return...")
 
 
+def do_history():
+    raw = input("ItemID: ").strip()
+    if not raw.isdigit():
+        print("Invalid ID.")
+        input("\nPress Enter to return...")
+        return
+    item_id = int(raw)
+    task = fetch_one(item_id)
+    if task is None:
+        print(f"No task found with ItemID {item_id}.")
+        input("\nPress Enter to return...")
+        return
+    history = fetch_status_history(item_id)
+    print(f"\nStatus History — #{item_id}: {task['Action']}")
+    print("-" * 50)
+    if history:
+        print(f"  {'Status':<8}  {'Date / Time'}")
+        print(f"  {'-'*6}  {'-'*19}")
+        for h in history:
+            print(f"  {h['status']:<8}  {h['changed_at']}")
+    else:
+        print("  No history recorded.")
+    input("\nPress Enter to return...")
+
+
 def main():
     ensure_project_column()
+    ensure_status_history_table()
 
     while True:
         open_count = count_open_tasks()
@@ -336,14 +362,17 @@ def main():
         print("---------")
         print("  1. Search   (or: 1 <search term>)")
         print("  2. Add New")
-        print("  3. Quit")
+        print("  3. Status History")
+        print("  4. Quit")
         raw = input("Choose: ").strip()
 
-        if not raw or raw == "3":
+        if not raw or raw == "4":
             print("Bye.")
             break
         elif raw == "2":
             do_add()
+        elif raw == "3":
+            do_history()
         elif raw == "1":
             do_search()
         elif raw.startswith("1 "):
